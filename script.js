@@ -1,4 +1,4 @@
-// === script.js (с автосохранением) ===
+// === script.js (ИСПРАВЛЕНО: автоподключение + отправка сообщений) ===
 
 function generateId() {
   return 'u' + Math.random().toString(36).substr(2, 8);
@@ -13,8 +13,8 @@ const peers = {};
 let currentFriend = null;
 let typingTimer;
 
-// Хранилище офферов
-const offers = JSON.parse(localStorage.getItem('offers') || '{}'); // { friendId: { myOffer, friendOffer } }
+// Хранилище офферов: { friendId: { myOffer: "...", friendOffer: "..." } }
+let offers = JSON.parse(localStorage.getItem('offers') || '{}');
 
 // UI
 const friendsList = document.getElementById('friendsList');
@@ -39,7 +39,6 @@ const saveOffer = document.getElementById('saveOffer');
 function compressSDP(sdp) {
   return LZString.compressToBase64(JSON.stringify(sdp));
 }
-
 function decompressSDP(str) {
   try {
     return JSON.parse(LZString.decompressFromBase64(str));
@@ -54,35 +53,42 @@ function saveOfferData(friendId, key, value) {
   offers[friendId][key] = value;
   localStorage.setItem('offers', JSON.stringify(offers));
 }
-
 function getOfferData(friendId, key) {
   return offers[friendId]?.[key] || '';
 }
 
-// === P2P ===
+// === P2P: Создание пира (только если нет) ===
 function createPeer(friendId, isCaller = true) {
+  if (peers[friendId]) return peers[friendId];
+
   const pc = new RTCPeerConnection({
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
   });
   peers[friendId] = pc;
 
-  const dc = pc.createDataChannel('chat');
-  dc.onopen = () => {
-    offerSection.style.display = 'none';
-    inputArea.style.display = 'flex';
-    updateStatus('Подключено');
-  };
-  dc.onmessage = e => handleMessage(friendId, e.data);
+  let dc;
+  if (isCaller) {
+    dc = pc.createDataChannel('chat');
+  }
 
   pc.ondatachannel = e => {
-    pc.dc = e.channel;
-    e.channel.onopen = () => {
+    dc = e.channel;
+    setupDataChannel(dc);
+  };
+
+  if (isCaller) {
+    setupDataChannel(dc);
+  }
+
+  function setupDataChannel(channel) {
+    channel.onopen = () => {
       offerSection.style.display = 'none';
       inputArea.style.display = 'flex';
       updateStatus('Подключено');
+      renderFriends();
     };
-    e.channel.onmessage = ev => handleMessage(friendId, ev.data);
-  };
+    channel.onmessage = e => handleMessage(friendId, e.data);
+  }
 
   pc.onicecandidate = e => {
     if (!e.candidate && pc.localDescription) {
@@ -100,7 +106,7 @@ function createPeer(friendId, isCaller = true) {
   return pc;
 }
 
-// === Автоподключение при загрузке ===
+// === Автоподключение ===
 async function tryAutoConnect(friendId) {
   const mySdpStr = getOfferData(friendId, 'myOffer');
   const friendSdpStr = getOfferData(friendId, 'friendOffer');
@@ -116,23 +122,24 @@ async function tryAutoConnect(friendId) {
   });
   peers[friendId] = pc;
 
+  pc.ondatachannel = e => {
+    const dc = e.channel;
+    dc.onopen = () => {
+      offerSection.style.display = 'none';
+      inputArea.style.display = 'flex';
+      updateStatus('Восстановлено');
+      renderFriends();
+    };
+    dc.onmessage = ev => handleMessage(friendId, ev.data);
+  };
+
   try {
     await pc.setLocalDescription(mySdp);
     await pc.setRemoteDescription(friendSdp);
-
-    pc.ondatachannel = e => {
-      pc.dc = e.channel;
-      e.channel.onopen = () => {
-        offerSection.style.display = 'none';
-        inputArea.style.display = 'flex';
-        updateStatus('Восстановлено');
-      };
-      e.channel.onmessage = ev => handleMessage(friendId, ev.data);
-    };
-
     return true;
   } catch (err) {
     console.error('Автоподключение не удалось:', err);
+    delete peers[friendId];
     return false;
   }
 }
@@ -154,7 +161,7 @@ function handleMessage(friendId, data) {
 }
 
 function sendSeen(friendId, id) {
-  const dc = peers[friendId]?.dc;
+  const dc = peers[friendId]?.dc || peers[friendId]?.datachannel;
   if (dc?.readyState === 'open') {
     dc.send(JSON.stringify({ type: 'seen', id }));
   }
@@ -195,8 +202,8 @@ addFriendBtn.onclick = () => {
 function renderFriends() {
   friendsList.innerHTML = '';
   Object.keys(friends).forEach(id => {
+    const isConnected = peers[id]?.dc?.readyState === 'open' || peers[id]?.datachannel?.readyState === 'open';
     const li = document.createElement('li');
-    const isConnected = peers[id]?.dc?.readyState === 'open';
     li.innerHTML = `
       <span>${friends[id].name} ${isConnected ? '<span style="color:#0f0">●</span>' : ''}</span>
       <button onclick="removeFriend('${id}')">×</button>
@@ -233,13 +240,14 @@ async function openChat(id) {
     return;
   }
 
-  offerSection.style.display = 'grid';
-  inputArea.style.display = 'none';
-  updateStatus('Генерация оффера...');
-
+  // Если нет пира — создаём
   if (!peers[id]) {
+    updateStatus('Генерация оффера...');
     createPeer(id, true);
   }
+
+  offerSection.style.display = 'grid';
+  inputArea.style.display = 'none';
 }
 
 function updateStatus(text) {
@@ -274,8 +282,9 @@ saveOffer.onclick = async () => {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
-    // Сохраняем оффер друга
+    // Сохраняем ответ
     saveOfferData(currentFriend, 'friendOffer', friendSdpStr);
+    saveOfferData(currentFriend, 'myOffer', compressSDP(pc.localDescription));
 
     updateStatus('Подключено! Можно писать.');
     offerSection.style.display = 'none';
@@ -283,7 +292,7 @@ saveOffer.onclick = async () => {
     renderFriends();
   } catch (err) {
     console.error(err);
-    alert('Ошибка подключения');
+    alert('Ошибка подключения: ' + err.message);
   }
 };
 
@@ -294,7 +303,7 @@ messageInput.addEventListener('keydown', e => {
     e.preventDefault();
     sendMsg();
   } else {
-    const dc = peers[currentFriend]?.dc;
+    const dc = peers[currentFriend]?.dc || peers[currentFriend]?.datachannel;
     if (dc?.readyState === 'open') {
       dc.send(JSON.stringify({ type: 'typing' }));
     }
@@ -312,11 +321,13 @@ function sendMsg() {
     type: 'text'
   };
 
-  const dc = peers[currentFriend]?.dc;
+  const dc = peers[currentFriend]?.dc || peers[currentFriend]?.datachannel;
   if (dc?.readyState === 'open') {
     dc.send(JSON.stringify(msg));
     appendMessage(msg, true);
     messageInput.value = '';
+  } else {
+    alert('Нет соединения');
   }
 }
 
