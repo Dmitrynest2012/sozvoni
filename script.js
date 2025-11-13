@@ -1,4 +1,4 @@
-// === script.js (ИСПРАВЛЕННЫЙ) ===
+// === script.js ===
 
 function generateId() {
   return 'u' + Math.random().toString(36).substr(2, 8);
@@ -25,77 +25,23 @@ const messagesDiv = document.getElementById('messages');
 const messageInput = document.getElementById('messageInput');
 const sendMessageBtn = document.getElementById('sendMessage');
 const typingIndicator = document.getElementById('typingIndicator');
-const qrSection = document.getElementById('qrSection');
+const offerSection = document.getElementById('offerSection');
 const inputArea = document.getElementById('inputArea');
-const qrcodeDiv = document.getElementById('qrcode');
-const scanQrBtn = document.getElementById('scanQr');
-const qrInput = document.getElementById('qrInput');
+const myOffer = document.getElementById('myOffer');
+const friendOffer = document.getElementById('friendOffer');
+const copyOffer = document.getElementById('copyOffer');
+const saveOffer = document.getElementById('saveOffer');
 
-// === QRCode (правильная инициализация) ===
-let qrCodeInstance = null;
-
-// Генерация QR-кода
-function generateQR(sdp) {
-  const data = JSON.stringify({ from: myId, sdp: sdp });
-  qrcodeDiv.innerHTML = ''; // Очистить
-  qrCodeInstance = new QRCode(qrcodeDiv, {
-    text: data,
-    width: 200,
-    height: 200,
-    colorDark: "#000000",
-    colorLight: "#ffffff",
-    correctLevel: QRCode.CorrectLevel.H
-  });
-  updateStatus('QR готов. Попросите друга отсканировать.');
+// === Сжатие/распаковка ===
+function compressSDP(sdp) {
+  return LZString.compressToBase64(JSON.stringify(sdp));
 }
 
-// === Сканирование QR ===
-scanQrBtn.onclick = () => qrInput.click();
-
-qrInput.onchange = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-
-  const img = new Image();
-  img.onload = () => {
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    canvas.width = img.width;
-    canvas.height = img.height;
-    ctx.drawImage(img, 0, 0);
-
-    // Используем jsQR (встроен в qrcode.js)
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(imageData.data, imageData.width, imageData.height);
-
-    if (code) {
-      handleScannedQR(code.data);
-    } else {
-      alert('QR-код не распознан. Попробуйте ещё раз.');
-    }
-  };
-  img.src = URL.createObjectURL(file);
-};
-
-async function handleScannedQR(dataStr) {
+function decompressSDP(str) {
   try {
-    const data = JSON.parse(dataStr);
-    if (data.from !== currentFriend) {
-      alert('Это QR-код не от вашего друга!');
-      return;
-    }
-
-    const pc = peers[currentFriend] || createPeer(currentFriend, false);
-    await pc.setRemoteDescription(data.sdp);
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    // После ответа — генерируем QR с answer (для друга)
-    generateQR(pc.localDescription);
-    updateStatus('Ответ отправлен. Ждём подключения...');
-  } catch (err) {
-    console.error(err);
-    alert('Ошибка обработки QR');
+    return JSON.parse(LZString.decompressFromBase64(str));
+  } catch (e) {
+    return null;
   }
 }
 
@@ -108,7 +54,7 @@ function createPeer(friendId, isCaller = true) {
 
   const dc = pc.createDataChannel('chat');
   dc.onopen = () => {
-    qrSection.style.display = 'none';
+    offerSection.style.display = 'none';
     inputArea.style.display = 'flex';
     updateStatus('Подключено');
   };
@@ -117,7 +63,7 @@ function createPeer(friendId, isCaller = true) {
   pc.ondatachannel = e => {
     pc.dc = e.channel;
     e.channel.onopen = () => {
-      qrSection.style.display = 'none';
+      offerSection.style.display = 'none';
       inputArea.style.display = 'flex';
       updateStatus('Подключено');
     };
@@ -126,9 +72,8 @@ function createPeer(friendId, isCaller = true) {
 
   pc.onicecandidate = e => {
     if (!e.candidate && pc.localDescription) {
-      if (isCaller) {
-        generateQR(pc.localDescription);
-      }
+      const compressed = compressSDP(pc.localDescription);
+      myOffer.value = compressed;
     }
   };
 
@@ -140,7 +85,7 @@ function createPeer(friendId, isCaller = true) {
   return pc;
 }
 
-// === Сообщения ===
+// === Обработка сообщений ===
 function handleMessage(friendId, data) {
   const msg = JSON.parse(data);
   if (msg.type === 'text') {
@@ -219,9 +164,9 @@ function openChat(id) {
   chatWith.textContent = friends[id].name;
   messagesDiv.innerHTML = '';
   chatContainer.style.display = 'flex';
-  qrSection.style.display = 'block';
+  offerSection.style.display = 'grid';
   inputArea.style.display = 'none';
-  updateStatus('Генерация QR...');
+  updateStatus('Генерация оффера...');
 
   if (!peers[id]) {
     createPeer(id, true);
@@ -232,6 +177,44 @@ function updateStatus(text) {
   statusEl.textContent = text;
 }
 
+// === Копирование и сохранение ===
+copyOffer.onclick = () => {
+  myOffer.select();
+  document.execCommand('copy');
+  alert('Оффер скопирован!');
+};
+
+saveOffer.onclick = async () => {
+  const friendSdpStr = friendOffer.value.trim();
+  if (!friendSdpStr) {
+    alert('Вставьте оффер друга');
+    return;
+  }
+
+  const friendSdp = decompressSDP(friendSdpStr);
+  if (!friendSdp) {
+    alert('Неверный оффер друга');
+    return;
+  }
+
+  const pc = peers[currentFriend];
+  if (!pc) return;
+
+  try {
+    await pc.setRemoteDescription(friendSdp);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    updateStatus('Подключено! Можно писать.');
+    offerSection.style.display = 'none';
+    inputArea.style.display = 'flex';
+  } catch (err) {
+    console.error(err);
+    alert('Ошибка подключения');
+  }
+};
+
+// === Отправка ===
 sendMessageBtn.onclick = sendMsg;
 messageInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -268,11 +251,5 @@ function saveFriends() {
   localStorage.setItem('friends', JSON.stringify(friends));
 }
 
-// === jsQR (встроен в qrcode.js) ===
-const script = document.createElement('script');
-script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
-script.onload = () => {
-  console.log('jsQR загружен');
-  renderFriends();
-};
-document.head.appendChild(script);
+// Старт
+renderFriends();

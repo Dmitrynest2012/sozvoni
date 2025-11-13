@@ -3,11 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>P2P Чат (QR)</title>
+  <title>P2P Чат (короткий оффер)</title>
   <link rel="stylesheet" href="style.css" />
-
-  <!-- В <head> добавь: -->
-<script src="https://cdn.jsdelivr.net/npm/qrcode.js@1.0.0/lib/qrcode.min.js"></script>
+  <!-- LZ-String для сжатия -->
+  <script src="https://cdn.jsdelivr.net/npm/lz-string@1.4.4/libs/lz-string.min.js"></script>
 </head>
 <body>
   <div class="container">
@@ -37,11 +36,18 @@
         <div id="status" style="font-size:12px; color:#0f0"></div>
       </div>
 
-      <!-- QR-код для подключения -->
-      <div id="qrSection" class="qr-section">
-        <p>Попросите друга отсканировать:</p>
-        <div id="qrcode"></div>
-        <button id="scanQr">Сканировать QR друга</button>
+      <!-- Обмен офферами -->
+      <div class="offer-section" id="offerSection">
+        <div class="offer-block">
+          <label>Мой оффер:</label>
+          <textarea id="myOffer" readonly></textarea>
+          <button id="copyOffer">Копировать</button>
+        </div>
+        <div class="offer-block">
+          <label>Оффер друга:</label>
+          <textarea id="friendOffer" placeholder="Вставьте сюда"></textarea>
+        </div>
+        <button id="saveOffer" class="save-btn">Сохранить и подключиться</button>
       </div>
 
       <div class="messages" id="messages"></div>
@@ -52,9 +58,6 @@
       </div>
     </div>
   </div>
-
-  <!-- Скрытый input для сканирования -->
-  <input type="file" id="qrInput" accept="image/*" style="display:none;" />
 
   <script src="script.js"></script>
 </body>
