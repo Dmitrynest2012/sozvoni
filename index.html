@@ -1,69 +1,70 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PeerSkype 5.0 — Просто P2P</title>
-    <link rel="stylesheet" href="style.css">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>P2P Чат</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>PeerSkype</h1>
-            <p>100% P2P. Просто работает.</p>
-        </header>
+  <div class="container">
+    <!-- Левая панель — друзья -->
+    <div class="sidebar">
+      <div class="header">
+        <h2>Мой ID</h2>
+        <div class="my-id" id="myId"></div>
+        <button id="generateId">Сгенерировать ID</button>
+      </div>
 
-        <!-- КЛЮЧ -->
-        <section id="key-section" class="card">
-            <h2>Ваш ключ</h2>
-            <div id="no-key">
-                <button id="generate-key" class="btn-primary">Сгенерировать</button>
-            </div>
-            <div id="has-key" class="hidden">
-                <div class="key-display">
-                    <input type="text" id="public-key" readonly>
-                    <button id="copy-key" class="btn-icon"><i class="fas fa-copy"></i></button>
-                </div>
-                <div id="qr-code" class="text-center"></div>
-            </div>
-        </section>
-
-        <!-- ДОБАВИТЬ ДРУГА -->
-        <section id="add-friend-section" class="card">
-            <h2>Добавить друга</h2>
-            <div class="input-group">
-                <input type="text" id="friend-key" placeholder="Ключ друга...">
-                <button id="add-friend" class="btn-success">Добавить</button>
-            </div>
-        </section>
-
-        <!-- ДРУЗЬЯ -->
-        <section id="friends-section" class="card hidden">
-            <h2>Друзья (<span id="friends-count">0</span>)</h2>
-            <ul id="friends-list"></ul>
-        </section>
-
-        <!-- ЗВОНОК -->
-        <section id="call-section" class="card hidden">
-            <div class="call-header">
-                <h2>Звонок: <span id="call-partner"></span></h2>
-                <button id="end-call" class="btn-danger">Завершить</button>
-            </div>
-            <div class="video-grid">
-                <video id="remote-video" autoplay playsinline></video>
-                <video id="local-video" autoplay muted playsinline class="pip"></video>
-            </div>
-            <div class="signal-box">
-                <button id="paste-offer" class="btn-secondary">Вставить OFFER (Ctrl+V)</button>
-                <p class="info">Нажми, когда друг пришлёт OFFER</p>
-            </div>
-        </section>
-
-        <div id="toast" class="toast hidden"></div>
+      <div class="friends-section">
+        <h3>Друзья</h3>
+        <div class="add-friend">
+          <input type="text" id="friendIdInput" placeholder="ID друга" />
+          <button id="addFriend">Добавить</button>
+        </div>
+        <ul id="friendsList"></ul>
+      </div>
     </div>
 
-    <script src="script.js"></script>
+    <!-- Правая панель — чат -->
+    <div class="chat-container" id="chatContainer" style="display: none;">
+      <div class="chat-header">
+        <h3 id="chatWith"></h3>
+        <div id="typingIndicator" class="typing"></div>
+      </div>
+
+      <div class="messages" id="messages"></div>
+
+      <div class="offer-section" id="offerSection">
+        <div class="offer-block">
+          <label>Ваш оффер:</label>
+          <textarea id="offerText" readonly></textarea>
+          <button id="copyOffer">Копировать</button>
+        </div>
+        <div class="offer-block">
+          <label>Вставьте оффер друга:</label>
+          <textarea id="friendOffer" placeholder="Вставьте сюда"></textarea>
+          <button id="createAnswer">Создать ответ</button>
+        </div>
+        <div class="offer-block" id="answerBlock" style="display:none;">
+          <label>Ваш ответ (отправьте другу):</label>
+          <textarea id="answerText" readonly></textarea>
+          <button id="copyAnswer">Копировать</button>
+        </div>
+        <div class="offer-block">
+          <label>Вставьте ответ друга:</label>
+          <textarea id="friendAnswer" placeholder="Вставьте сюда"></textarea>
+          <button id="connectPeer">Подключиться</button>
+        </div>
+      </div>
+
+      <div class="input-area" id="inputArea" style="display:none;">
+        <textarea id="messageInput" placeholder="Введите сообщение..."></textarea>
+        <button id="sendMessage">Отправить</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
 </body>
 </html>
