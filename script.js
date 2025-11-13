@@ -1,4 +1,4 @@
-// === script.js ===
+// === script.js (с автосохранением) ===
 
 function generateId() {
   return 'u' + Math.random().toString(36).substr(2, 8);
@@ -8,10 +8,13 @@ const myId = localStorage.getItem('myId') || generateId();
 localStorage.setItem('myId', myId);
 document.getElementById('myId').textContent = myId;
 
-const friends = JSON.parse(localStorage.getItem('friends') || '{}');
+let friends = JSON.parse(localStorage.getItem('friends') || '{}');
 const peers = {};
 let currentFriend = null;
 let typingTimer;
+
+// Хранилище офферов
+const offers = JSON.parse(localStorage.getItem('offers') || '{}'); // { friendId: { myOffer, friendOffer } }
 
 // UI
 const friendsList = document.getElementById('friendsList');
@@ -32,7 +35,7 @@ const friendOffer = document.getElementById('friendOffer');
 const copyOffer = document.getElementById('copyOffer');
 const saveOffer = document.getElementById('saveOffer');
 
-// === Сжатие/распаковка ===
+// === Сжатие ===
 function compressSDP(sdp) {
   return LZString.compressToBase64(JSON.stringify(sdp));
 }
@@ -43,6 +46,17 @@ function decompressSDP(str) {
   } catch (e) {
     return null;
   }
+}
+
+// === Сохранение офферов ===
+function saveOfferData(friendId, key, value) {
+  if (!offers[friendId]) offers[friendId] = {};
+  offers[friendId][key] = value;
+  localStorage.setItem('offers', JSON.stringify(offers));
+}
+
+function getOfferData(friendId, key) {
+  return offers[friendId]?.[key] || '';
 }
 
 // === P2P ===
@@ -74,6 +88,7 @@ function createPeer(friendId, isCaller = true) {
     if (!e.candidate && pc.localDescription) {
       const compressed = compressSDP(pc.localDescription);
       myOffer.value = compressed;
+      saveOfferData(friendId, 'myOffer', compressed);
     }
   };
 
@@ -83,6 +98,43 @@ function createPeer(friendId, isCaller = true) {
   }
 
   return pc;
+}
+
+// === Автоподключение при загрузке ===
+async function tryAutoConnect(friendId) {
+  const mySdpStr = getOfferData(friendId, 'myOffer');
+  const friendSdpStr = getOfferData(friendId, 'friendOffer');
+
+  if (!mySdpStr || !friendSdpStr) return false;
+
+  const mySdp = decompressSDP(mySdpStr);
+  const friendSdp = decompressSDP(friendSdpStr);
+  if (!mySdp || !friendSdp) return false;
+
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  });
+  peers[friendId] = pc;
+
+  try {
+    await pc.setLocalDescription(mySdp);
+    await pc.setRemoteDescription(friendSdp);
+
+    pc.ondatachannel = e => {
+      pc.dc = e.channel;
+      e.channel.onopen = () => {
+        offerSection.style.display = 'none';
+        inputArea.style.display = 'flex';
+        updateStatus('Восстановлено');
+      };
+      e.channel.onmessage = ev => handleMessage(friendId, ev.data);
+    };
+
+    return true;
+  } catch (err) {
+    console.error('Автоподключение не удалось:', err);
+    return false;
+  }
 }
 
 // === Обработка сообщений ===
@@ -144,7 +196,11 @@ function renderFriends() {
   friendsList.innerHTML = '';
   Object.keys(friends).forEach(id => {
     const li = document.createElement('li');
-    li.innerHTML = `<span>${friends[id].name}</span><button onclick="removeFriend('${id}')">×</button>`;
+    const isConnected = peers[id]?.dc?.readyState === 'open';
+    li.innerHTML = `
+      <span>${friends[id].name} ${isConnected ? '<span style="color:#0f0">●</span>' : ''}</span>
+      <button onclick="removeFriend('${id}')">×</button>
+    `;
     li.onclick = e => e.target.tagName !== 'BUTTON' && openChat(id);
     friendsList.appendChild(li);
   });
@@ -154,16 +210,29 @@ window.removeFriend = id => {
   delete friends[id];
   if (peers[id]) peers[id].close();
   delete peers[id];
+  delete offers[id];
+  localStorage.setItem('offers', JSON.stringify(offers));
   saveFriends();
   renderFriends();
   if (currentFriend === id) chatContainer.style.display = 'none';
 };
 
-function openChat(id) {
+async function openChat(id) {
   currentFriend = id;
   chatWith.textContent = friends[id].name;
   messagesDiv.innerHTML = '';
   chatContainer.style.display = 'flex';
+
+  // Восстанавливаем офферы
+  myOffer.value = getOfferData(id, 'myOffer');
+  friendOffer.value = getOfferData(id, 'friendOffer');
+
+  // Пробуем автоподключение
+  if (await tryAutoConnect(id)) {
+    renderFriends();
+    return;
+  }
+
   offerSection.style.display = 'grid';
   inputArea.style.display = 'none';
   updateStatus('Генерация оффера...');
@@ -205,9 +274,13 @@ saveOffer.onclick = async () => {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
+    // Сохраняем оффер друга
+    saveOfferData(currentFriend, 'friendOffer', friendSdpStr);
+
     updateStatus('Подключено! Можно писать.');
     offerSection.style.display = 'none';
     inputArea.style.display = 'flex';
+    renderFriends();
   } catch (err) {
     console.error(err);
     alert('Ошибка подключения');
@@ -250,6 +323,13 @@ function sendMsg() {
 function saveFriends() {
   localStorage.setItem('friends', JSON.stringify(friends));
 }
+
+// === Сохранение при закрытии ===
+window.addEventListener('beforeunload', () => {
+  if (currentFriend && myOffer.value) {
+    saveOfferData(currentFriend, 'myOffer', myOffer.value);
+  }
+});
 
 // Старт
 renderFriends();
