@@ -1,0 +1,50 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PeerSkype — P2P-звонки без серверов</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>PeerSkype</h1>
+        <p>Децентрализованный аналог Skype на WebRTC + P2P</p>
+
+        <div id="auth-section">
+            <h2>Вход / Регистрация</h2>
+            <button id="generate-key">Сгенерировать ключ</button>
+            <div id="key-display" class="hidden">
+                <p>Ваш публичный ключ:</p>
+                <input type="text" id="public-key" readonly>
+                <button id="copy-key">Копировать</button>
+            </div>
+            <div class="mt-20">
+                <p>Вставьте ключ друга:</p>
+                <input type="text" id="friend-key" placeholder="Ключ друга">
+                <button id="add-friend">Добавить друга</button>
+            </div>
+        </div>
+
+        <div id="friends-section" class="hidden">
+            <h2>Друзья</h2>
+            <ul id="friends-list"></ul>
+        </div>
+
+        <div id="call-section" class="hidden">
+            <h2>Звонок</h2>
+            <div class="call-info">
+                <p>С кем: <span id="call-partner"></span></p>
+                <button id="end-call" class="btn-danger">Завершить звонок</button>
+            </div>
+            <div class="video-container">
+                <video id="local-video" autoplay muted></video>
+                <video id="remote-video" autoplay></video>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
