@@ -1,4 +1,5 @@
-// Генерация ID
+// === script.js (ИСПРАВЛЕННЫЙ) ===
+
 function generateId() {
   return 'u' + Math.random().toString(36).substr(2, 8);
 }
@@ -10,6 +11,7 @@ document.getElementById('myId').textContent = myId;
 const friends = JSON.parse(localStorage.getItem('friends') || '{}');
 const peers = {};
 let currentFriend = null;
+let typingTimer;
 
 // UI
 const friendsList = document.getElementById('friendsList');
@@ -29,7 +31,73 @@ const qrcodeDiv = document.getElementById('qrcode');
 const scanQrBtn = document.getElementById('scanQr');
 const qrInput = document.getElementById('qrInput');
 
-let typingTimer;
+// === QRCode (правильная инициализация) ===
+let qrCodeInstance = null;
+
+// Генерация QR-кода
+function generateQR(sdp) {
+  const data = JSON.stringify({ from: myId, sdp: sdp });
+  qrcodeDiv.innerHTML = ''; // Очистить
+  qrCodeInstance = new QRCode(qrcodeDiv, {
+    text: data,
+    width: 200,
+    height: 200,
+    colorDark: "#000000",
+    colorLight: "#ffffff",
+    correctLevel: QRCode.CorrectLevel.H
+  });
+  updateStatus('QR готов. Попросите друга отсканировать.');
+}
+
+// === Сканирование QR ===
+scanQrBtn.onclick = () => qrInput.click();
+
+qrInput.onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+
+    // Используем jsQR (встроен в qrcode.js)
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+    if (code) {
+      handleScannedQR(code.data);
+    } else {
+      alert('QR-код не распознан. Попробуйте ещё раз.');
+    }
+  };
+  img.src = URL.createObjectURL(file);
+};
+
+async function handleScannedQR(dataStr) {
+  try {
+    const data = JSON.parse(dataStr);
+    if (data.from !== currentFriend) {
+      alert('Это QR-код не от вашего друга!');
+      return;
+    }
+
+    const pc = peers[currentFriend] || createPeer(currentFriend, false);
+    await pc.setRemoteDescription(data.sdp);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    // После ответа — генерируем QR с answer (для друга)
+    generateQR(pc.localDescription);
+    updateStatus('Ответ отправлен. Ждём подключения...');
+  } catch (err) {
+    console.error(err);
+    alert('Ошибка обработки QR');
+  }
+}
 
 // === P2P ===
 function createPeer(friendId, isCaller = true) {
@@ -58,9 +126,8 @@ function createPeer(friendId, isCaller = true) {
 
   pc.onicecandidate = e => {
     if (!e.candidate && pc.localDescription) {
-      const sdp = JSON.stringify(pc.localDescription);
       if (isCaller) {
-        generateQR(sdp);
+        generateQR(pc.localDescription);
       }
     }
   };
@@ -72,48 +139,6 @@ function createPeer(friendId, isCaller = true) {
 
   return pc;
 }
-
-// Генерация QR
-function generateQR(sdp) {
-  qrcodeDiv.innerHTML = '';
-  new QRCode(qrcodeDiv, {
-    text: JSON.stringify({ from: myId, sdp: JSON.parse(sdp) }),
-    width: 200,
-    height: 200,
-    colorDark: "#000",
-    colorLight: "#fff"
-  });
-}
-
-// Сканирование QR
-scanQrBtn.onclick = () => qrInput.click();
-qrInput.onchange = async e => {
-  const file = e.target.files[0];
-  if (!file) return;
-
-  const img = new Image();
-  img.onload = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = img.width;
-    canvas.height = img.height;
-    canvas.getContext('2d').drawImage(img, 0, 0);
-    const dataUrl = canvas.toDataURL();
-
-    // Используем jsQR (встроен в qrcode.js)
-    qrcode.callback = async (err, result) => {
-      if (err || !result) return alert('QR не распознан');
-      const data = JSON.parse(result.data);
-      if (data.from !== currentFriend) return alert('QR не от этого друга');
-
-      const pc = peers[currentFriend] || createPeer(currentFriend, false);
-      await pc.setRemoteDescription(data.sdp);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-    };
-    qrcode.decode(dataUrl);
-  };
-  img.src = URL.createObjectURL(file);
-};
 
 // === Сообщения ===
 function handleMessage(friendId, data) {
@@ -243,5 +268,11 @@ function saveFriends() {
   localStorage.setItem('friends', JSON.stringify(friends));
 }
 
-// Старт
-renderFriends();
+// === jsQR (встроен в qrcode.js) ===
+const script = document.createElement('script');
+script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+script.onload = () => {
+  console.log('jsQR загружен');
+  renderFriends();
+};
+document.head.appendChild(script);
