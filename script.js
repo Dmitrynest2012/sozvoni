@@ -1,7 +1,7 @@
 class PeerSkype {
     constructor() {
         this.myKey = null;
-        this.friends = new Map(); // key → { pc, dc, online, lastPing }
+        this.friends = new Map(); // key → { pc: null, dc: null, online: false }
         this.localStream = null;
         this.currentCall = null;
 
@@ -33,13 +33,13 @@ class PeerSkype {
             endCall: document.getElementById('end-call'),
             localVideo: document.getElementById('local-video'),
             remoteVideo: document.getElementById('remote-video'),
-            pasteSignal: document.getElementById('paste-signal')
+            pasteOffer: document.getElementById('paste-offer')
         };
 
         this.el.generateKey.onclick = () => this.generateKey();
         this.el.copyKey.onclick = () => this.copyKey();
         this.el.addFriend.onclick = () => this.addFriend();
-        this.el.pasteSignal.onclick = () => this.pasteSignal();
+        this.el.pasteOffer.onclick = () => this.pasteOffer();
         this.el.endCall.onclick = () => this.hangUp();
     }
 
@@ -48,7 +48,7 @@ class PeerSkype {
             this.localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             this.el.localVideo.srcObject = this.localStream;
         } catch (err) {
-            this.toast('Нет доступа к камере/микрофону');
+            this.toast('Нет камеры/микрофона');
         }
     }
 
@@ -60,15 +60,15 @@ class PeerSkype {
         this.generateQR();
         this.copyKey();
         this.saveData();
-        this.toast('Ключ готов! QR и копия в буфере');
+        this.toast('Ключ готов! Отправь другу');
     }
 
     generateQR() {
         this.el.qrCode.innerHTML = '';
         new QRCode(this.el.qrCode, {
             text: this.myKey,
-            width: 180,
-            height: 180,
+            width: 160,
+            height: 160,
             colorDark: "#ffffff",
             colorLight: "#00000000"
         });
@@ -83,11 +83,11 @@ class PeerSkype {
         if (!key || key === this.myKey) return this.toast('Неверный ключ');
         if (this.friends.has(key)) return this.toast('Уже добавлен');
 
-        this.friends.set(key, { pc: null, dc: null, online: false, lastPing: 0 });
+        this.friends.set(key, { pc: null, dc: null, online: false });
         this.el.friendKey.value = '';
         this.renderFriends();
         this.saveData();
-        this.toast('Друг добавлен. Жди OFFER.');
+        this.toast('Друг добавлен');
     }
 
     renderFriends() {
@@ -104,12 +104,12 @@ class PeerSkype {
             const li = document.createElement('li');
             li.className = 'friend-item';
             li.innerHTML = `
-                <div class="status-dot ${data.online ? 'online' : ''} ${data.ringing ? 'ringing' : ''}"></div>
+                <div class="status-dot ${data.online ? 'online' : ''}"></div>
                 <div class="friend-info">
                     <div class="friend-key">${key}</div>
                 </div>
                 <button class="btn-success" onclick="app.call('${key}')">
-                    <i class="fas fa-phone"></i> Позвонить
+                    Позвонить
                 </button>
             `;
             this.el.friendsList.appendChild(li);
@@ -118,7 +118,7 @@ class PeerSkype {
 
     call(friendKey) {
         const friend = this.friends.get(friendKey);
-        if (friend.pc) return this.toast('Уже в звонке');
+        if (friend.pc) return this.toast('Звонок уже идёт');
 
         const pc = this.createPC(friendKey, true);
         friend.pc = pc;
@@ -126,8 +126,8 @@ class PeerSkype {
         pc.createOffer()
             .then(offer => pc.setLocalDescription(offer))
             .then(() => {
-                const msg = btoa(JSON.stringify({ type: 'offer', sdp: pc.localDescription.sdp }));
-                const text = `OFFER:${msg}`;
+                const payload = btoa(JSON.stringify({ type: 'offer', sdp: pc.localDescription.sdp }));
+                const text = `OFFER:${payload}`;
                 navigator.clipboard.writeText(text).then(() => {
                     this.toast('OFFER скопирован! Отправь другу');
                 });
@@ -136,29 +136,33 @@ class PeerSkype {
 
     createPC(friendKey, isCaller) {
         const pc = new RTCPeerConnection({
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-            ]
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
         });
 
         this.localStream.getTracks().forEach(t => pc.addTrack(t, this.localStream));
-        const dc = pc.createDataChannel('p2p');
+
+        const dc = pc.createDataChannel('chat');
         this.setupDataChannel(dc, friendKey);
 
         pc.ontrack = (e) => {
             this.el.remoteVideo.srcObject = e.streams[0];
             this.showCallUI(friendKey);
+            this.currentCall = friendKey;
         };
 
-        pc.ondatachannel = (e) => {
-            this.setupDataChannel(e.channel, friendKey);
-        };
+        pc.ondatachannel = (e) => this.setupDataChannel(e.channel, friendKey);
 
         pc.onicecandidate = (e) => {
             if (e.candidate) {
-                const msg = btoa(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
-                navigator.clipboard.writeText(`ICE:${msg}`);
+                const payload = btoa(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
+                navigator.clipboard.writeText(`ICE:${payload}`);
+            }
+        };
+
+        pc.onconnectionstatechange = () => {
+            if (pc.connectionState === 'failed') {
+                this.toast('Соединение разорвано');
+                this.hangUp();
             }
         };
 
@@ -171,17 +175,8 @@ class PeerSkype {
 
         dc.onopen = () => {
             friend.online = true;
-            friend.lastPing = Date.now();
             this.renderFriends();
-            this.startPing(friendKey);
-        };
-
-        dc.onmessage = (e) => {
-            const msg = JSON.parse(e.data);
-            if (msg.type === 'ping') {
-                friend.lastPing = Date.now();
-                dc.send(JSON.stringify({ type: 'pong' }));
-            }
+            this.toast('P2P-соединение установлено!');
         };
 
         dc.onclose = () => {
@@ -190,35 +185,46 @@ class PeerSkype {
         };
     }
 
-    startPing(friendKey) {
-        const interval = setInterval(() => {
-            const friend = this.friends.get(friendKey);
-            if (!friend.dc || friend.dc.readyState !== 'open') {
-                clearInterval(interval);
-                return;
-            }
-            if (Date.now() - friend.lastPing > 10000) {
-                friend.online = false;
-                this.renderFriends();
-            } else {
-                friend.dc.send(JSON.stringify({ type: 'ping' }));
-            }
-        }, 3000);
-    }
-
-    async pasteSignal() {
+    async pasteOffer() {
         try {
             const text = await navigator.clipboard.readText();
-            this.handleSignal(text);
+            if (!text.startsWith('OFFER:')) return this.toast('Это не OFFER');
+
+            const payload = text.split(':')[1];
+            const data = JSON.parse(atob(payload));
+
+            // Найдём, от кого
+            let friendKey = null;
+            for (const [k, v] of this.friends) {
+                if (v.pc && v.pc.remoteDescription?.sdp.includes(data.sdp.slice(0, 50))) {
+                    friendKey = k;
+                    break;
+                }
+            }
+            if (!friendKey) return this.toast('Друг не найден');
+
+            const friend = this.friends.get(friendKey);
+            if (friend.pc) friend.pc.close();
+
+            const pc = this.createPC(friendKey, false);
+            friend.pc = pc;
+
+            await pc.setRemoteDescription(new RTCSessionDescription(data));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            const answerPayload = btoa(JSON.stringify({ type: 'answer', sdp: answer.sdp }));
+            await navigator.clipboard.writeText(`ANSWER:${answerPayload}`);
+            this.toast('ANSWER скопирован! Отправь другу');
         } catch (err) {
-            this.toast('Не удалось прочитать буфер');
+            this.toast('Ошибка: ' + err.message);
         }
     }
 
     setupPasteHandler() {
         document.addEventListener('paste', (e) => {
             const text = (e.clipboardData || window.clipboardData).getData('text');
-            if (text.startsWith('OFFER:') || text.startsWith('ICE:')) {
+            if (text.startsWith('OFFER:') || text.startsWith('ANSWER:') || text.startsWith('ICE:')) {
                 e.preventDefault();
                 this.handleSignal(text);
             }
@@ -226,31 +232,20 @@ class PeerSkype {
     }
 
     handleSignal(text) {
-        if (!text.startsWith('OFFER:') && !text.startsWith('ICE:')) return;
+        if (!text.startsWith('OFFER:') && !text.startsWith('ANSWER:') && !text.startsWith('ICE:')) return;
 
         const [type, payload] = text.split(':');
         const data = JSON.parse(atob(payload));
-        const friendKey = data.from || Object.keys(this.friends).find(k => this.friends.get(k).pc);
 
-        if (!this.friends.has(friendKey)) return;
+        let friendKey = this.currentCall;
+        if (!friendKey) return;
 
         const friend = this.friends.get(friendKey);
-        if (!friend.pc) {
-            friend.pc = this.createPC(friendKey, false);
-        }
+        if (!friend.pc) return;
 
-        if (type === 'OFFER') {
-            friend.pc.setRemoteDescription(new RTCSessionDescription(data))
-                .then(() => friend.pc.createAnswer())
-                .then(answer => friend.pc.setLocalDescription(answer))
-                .then(() => {
-                    const msg = btoa(JSON.stringify({ type: 'answer', sdp: friend.pc.localDescription.sdp }));
-                    navigator.clipboard.writeText(`ANSWER:${msg}`);
-                    this.toast('ANSWER отправлен');
-                });
-        } else if (type === 'ANSWER' && friend.pc) {
+        if (type === 'ANSWER') {
             friend.pc.setRemoteDescription(new RTCSessionDescription(data));
-        } else if (type === 'ICE' && friend.pc) {
+        } else if (type === 'ICE') {
             friend.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
         }
     }
@@ -263,21 +258,26 @@ class PeerSkype {
     hangUp() {
         if (this.currentCall) {
             const friend = this.friends.get(this.currentCall);
-            if (friend.pc) friend.pc.close();
-            friend.pc = null; friend.dc = null; friend.online = false;
+            if (friend.pc) {
+                friend.pc.close();
+                friend.pc = null;
+                friend.dc = null;
+                friend.online = false;
+            }
             this.currentCall = null;
         }
         this.el.remoteVideo.srcObject = null;
         this.el.callSection.classList.add('hidden');
+        this.renderFriends();
     }
 
     saveData() {
         const data = { myKey: this.myKey, friends: Array.from(this.friends.keys()) };
-        localStorage.setItem('peerskype_p2p', JSON.stringify(data));
+        localStorage.setItem('peerskype_v5', JSON.stringify(data));
     }
 
     loadData() {
-        const raw = localStorage.getItem('peerskype_p2p');
+        const raw = localStorage.getItem('peerskype_v5');
         if (raw) {
             const data = JSON.parse(raw);
             this.myKey = data.myKey;
@@ -287,9 +287,7 @@ class PeerSkype {
                 this.el.hasKey.classList.remove('hidden');
                 this.generateQR();
             }
-            data.friends.forEach(key => {
-                this.friends.set(key, { pc: null, dc: null, online: false, lastPing: 0 });
-            });
+            data.friends.forEach(k => this.friends.set(k, { pc: null, dc: null, online: false }));
             this.renderFriends();
         }
     }
