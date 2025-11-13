@@ -4,45 +4,78 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PeerSkype — P2P-звонки без серверов</title>
+    <title>PeerSkype 2.0 — P2P без серверов</title>
     <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 </head>
 <body>
     <div class="container">
-        <h1>PeerSkype</h1>
-        <p>Децентрализованный аналог Skype на WebRTC + P2P</p>
+        <header>
+            <h1><i class="fas fa-video"></i> PeerSkype</h1>
+            <p>Децентрализованные звонки. Без серверов. Навсегда.</p>
+        </header>
 
-        <div id="auth-section">
-            <h2>Вход / Регистрация</h2>
-            <button id="generate-key">Сгенерировать ключ</button>
-            <div id="key-display" class="hidden">
-                <p>Ваш публичный ключ:</p>
-                <input type="text" id="public-key" readonly>
-                <button id="copy-key">Копировать</button>
+        <!-- === АВТОРИЗАЦИЯ / КЛЮЧ === -->
+        <section id="key-section" class="card">
+            <h2><i class="fas fa-key"></i> Ваш ключ</h2>
+            
+            <div id="no-key" class="text-center">
+                <p>У вас ещё нет ключа. Сгенерируйте его один раз.</p>
+                <button id="generate-key" class="btn-primary">
+                    <i class="fas fa-magic"></i> Сгенерировать ключ
+                </button>
             </div>
-            <div class="mt-20">
-                <p>Вставьте ключ друга:</p>
-                <input type="text" id="friend-key" placeholder="Ключ друга">
-                <button id="add-friend">Добавить друга</button>
-            </div>
-        </div>
 
-        <div id="friends-section" class="hidden">
-            <h2>Друзья</h2>
+            <div id="has-key" class="hidden">
+                <div class="key-display">
+                    <input type="text" id="public-key" readonly placeholder="Ваш ключ">
+                    <button id="copy-key" class="btn-icon" title="Копировать">
+                        <i class="fas fa-copy"></i>
+                    </button>
+                </div>
+                <p class="info"><i class="fas fa-info-circle"></i> Отправьте этот ключ другу</p>
+            </div>
+        </section>
+
+        <!-- === ДОБАВЛЕНИЕ ДРУГА === -->
+        <section id="add-friend-section" class="card">
+            <h2><i class="fas fa-user-plus"></i> Добавить друга</h2>
+            <div class="input-group">
+                <input type="text" id="friend-key" placeholder="Вставьте ключ друга...">
+                <button id="add-friend" class="btn-success">
+                    <i class="fas fa-plus"></i> Добавить
+                </button>
+            </div>
+            <p class="info">Друг добавится навсегда. Можно звонить в любое время.</p>
+        </section>
+
+        <!-- === СПИСОК ДРУЗЕЙ === -->
+        <section id="friends-section" class="card hidden">
+            <h2><i class="fas fa-users"></i> Друзья (<span id="friends-count">0</span>)</h2>
             <ul id="friends-list"></ul>
-        </div>
+        </section>
 
-        <div id="call-section" class="hidden">
-            <h2>Звонок</h2>
-            <div class="call-info">
-                <p>С кем: <span id="call-partner"></span></p>
-                <button id="end-call" class="btn-danger">Завершить звонок</button>
+        <!-- === ЗВОНОК === -->
+        <section id="call-section" class="card hidden">
+            <div class="call-header">
+                <h2><i class="fas fa-phone"></i> Звонок с <span id="call-partner"></span></h2>
+                <button id="end-call" class="btn-danger">
+                    <i class="fas fa-phone-slash"></i> Завершить
+                </button>
             </div>
-            <div class="video-container">
-                <video id="local-video" autoplay muted></video>
-                <video id="remote-video" autoplay></video>
+            <div class="video-grid">
+                <video id="remote-video" autoplay playsinline></video>
+                <video id="local-video" autoplay muted playsinline class="pip"></video>
             </div>
-        </div>
+            <div class="signal-paste">
+                <button id="paste-signal" class="btn-secondary">
+                    <i class="fas fa-paste"></i> Вставить сигнал (Ctrl+V)
+                </button>
+            </div>
+        </section>
+
+        <!-- === ПОДСКАЗКА === -->
+        <div id="toast" class="toast hidden"></div>
     </div>
 
     <script src="script.js"></script>
