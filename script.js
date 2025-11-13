@@ -1,19 +1,22 @@
-// script.js
 class PeerSkype {
     constructor() {
+        this.ws = null;
+        this.myKey = null;
+        this.friends = new Map(); // key → { online, ringing, pc }
         this.localStream = null;
-        this.peerConnections = new Map();
         this.currentCall = null;
-        this.myPublicKey = null;
-        this.friends = new Set();
 
-        this.initElements();
-        this.initMedia();
-        this.loadData();
-        this.setupPasteHandler();
+        this.init();
     }
 
-    initElements() {
+    async init() {
+        this.setupElements();
+        this.setupWebSocket();
+        this.setupMedia();
+        this.loadData();
+    }
+
+    setupElements() {
         this.el = {
             generateKey: document.getElementById('generate-key'),
             noKey: document.getElementById('no-key'),
@@ -30,58 +33,71 @@ class PeerSkype {
             endCall: document.getElementById('end-call'),
             localVideo: document.getElementById('local-video'),
             remoteVideo: document.getElementById('remote-video'),
-            pasteSignal: document.getElementById('paste-signal')
+            statusIcon: document.getElementById('status-icon'),
+            statusText: document.getElementById('status-text')
         };
 
-        // События
         this.el.generateKey.onclick = () => this.generateKey();
-        this.el.copyKey.onclick = () => this.copyMyKey();
+        this.el.copyKey.onclick = () => this.copyKeyToClipboard();
         this.el.addFriend.onclick = () => this.addFriend();
-        this.el.pasteSignal.onclick = () => this.pasteFromClipboard();
         this.el.endCall.onclick = () => this.hangUp();
     }
 
-    async initMedia() {
+    setupWebSocket() {
+        // Бесплатный публичный сигнальный сервер
+        this.ws = new WebSocket('wss://signaling.peerskype.live');
+
+        this.ws.onopen = () => {
+            this.updateStatus('online', 'Подключено');
+            if (this.myKey) this.send({ type: 'register', key: this.myKey });
+        };
+
+        this.ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            this.handleSignal(msg);
+        };
+
+        this.ws.onclose = () => {
+            this.updateStatus('offline', 'Нет связи');
+            setTimeout(() => this.setupWebSocket(), 3000);
+        };
+    }
+
+    async setupMedia() {
         try {
             this.localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             this.el.localVideo.srcObject = this.localStream;
         } catch (err) {
-            this.toast('Ошибка камеры/микрофона: ' + err.message);
+            this.toast('Нет доступа к камере/микрофону');
         }
     }
 
     generateKey() {
-        this.myPublicKey = 'psk_' + Math.random().toString(36).substr(2, 9) + Date.now().toString(36).substr(2, 4);
-        this.el.publicKey.value = this.myPublicKey;
+        this.myKey = 'psk_' + Math.random().toString(36).substr(2, 12);
+        this.el.publicKey.value = this.myKey;
         this.el.noKey.classList.add('hidden');
         this.el.hasKey.classList.remove('hidden');
-        this.copyMyKey();
+        this.copyKeyToClipboard();
         this.saveData();
-        this.toast('Ключ сгенерирован и скопирован!');
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            this.send({ type: 'register', key: this.myKey });
+        }
     }
 
-    copyMyKey() {
-        navigator.clipboard.writeText(this.myPublicKey).then(() => {
-            this.toast('Ключ скопирован в буфер!');
-        });
+    copyKeyToClipboard() {
+        navigator.clipboard.writeText(this.myKey).then(() => this.toast('Ключ скопирован!'));
     }
 
     addFriend() {
         const key = this.el.friendKey.value.trim();
-        if (!key || key === this.myPublicKey) {
-            this.toast('Неверный ключ');
-            return;
-        }
-        if (this.friends.has(key)) {
-            this.toast('Друг уже добавлен');
-            return;
-        }
+        if (!key || key === this.myKey) return this.toast('Неверный ключ');
+        if (this.friends.has(key)) return this.toast('Уже добавлен');
 
-        this.friends.add(key);
+        this.friends.set(key, { online: false, ringing: false, pc: null });
         this.el.friendKey.value = '';
         this.renderFriends();
         this.saveData();
-        this.toast('Друг добавлен!');
+        this.toast('Друг добавлен');
     }
 
     renderFriends() {
@@ -92,15 +108,17 @@ class PeerSkype {
             this.el.friendsSection.classList.add('hidden');
             return;
         }
-
         this.el.friendsSection.classList.remove('hidden');
 
-        [...this.friends].forEach(key => {
+        this.friends.forEach((data, key) => {
             const li = document.createElement('li');
             li.className = 'friend-item';
             li.innerHTML = `
-                <div class="friend-key">${key}</div>
-                <button class="btn-success" onclick="app.callFriend('${key}')">
+                <div class="status-dot ${data.online ? 'online' : ''} ${data.ringing ? 'ringing' : ''}"></div>
+                <div class="friend-info">
+                    <div class="friend-key">${key}</div>
+                </div>
+                <button class="btn-success" onclick="app.call('${key}')">
                     <i class="fas fa-phone"></i> Позвонить
                 </button>
             `;
@@ -108,34 +126,22 @@ class PeerSkype {
         });
     }
 
-    async callFriend(friendKey) {
-        if (this.peerConnections.has(friendKey)) {
-            this.toast('Звонок уже идёт');
-            return;
-        }
+    call(friendKey) {
+        if (!this.friends.get(friendKey)?.online) return this.toast('Друг оффлайн');
 
-        const pc = this.createPeerConnection(friendKey);
-        this.peerConnections.set(friendKey, pc);
+        const pc = this.createPC(friendKey, true);
+        this.friends.get(friendKey).pc = pc;
         this.currentCall = friendKey;
+        this.showCallUI(friendKey);
 
-        this.el.callPartner.textContent = friendKey;
-        this.el.callSection.classList.remove('hidden');
-
-        try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-
-            const payload = btoa(JSON.stringify({ type: 'offer', sdp: offer.sdp, from: this.myPublicKey }));
-            const message = `CALL_OFFER:${payload}`;
-            await navigator.clipboard.writeText(message);
-            this.toast('OFFER скопирован! Отправьте другу.');
-        } catch (err) {
-            this.toast('Ошибка звонка');
-            console.error(err);
-        }
+        pc.createOffer()
+            .then(offer => pc.setLocalDescription(offer))
+            .then(() => {
+                this.send({ type: 'offer', to: friendKey, sdp: pc.localDescription });
+            });
     }
 
-    createPeerConnection(friendKey) {
+    createPC(friendKey, isCaller) {
         const pc = new RTCPeerConnection({
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -143,7 +149,7 @@ class PeerSkype {
             ]
         });
 
-        this.localStream.getTracks().forEach(track => pc.addTrack(track, this.localStream));
+        this.localStream.getTracks().forEach(t => pc.addTrack(t, this.localStream));
 
         pc.ontrack = (e) => {
             this.el.remoteVideo.srcObject = e.streams[0];
@@ -151,9 +157,7 @@ class PeerSkype {
 
         pc.onicecandidate = (e) => {
             if (e.candidate) {
-                const payload = btoa(JSON.stringify({ type: 'candidate', candidate: e.candidate, from: this.myPublicKey }));
-                navigator.clipboard.writeText(`SIGNAL:${payload}`);
-                this.toast('ICE-кандидат скопирован');
+                this.send({ type: 'candidate', to: friendKey, candidate: e.candidate });
             }
         };
 
@@ -167,117 +171,127 @@ class PeerSkype {
         return pc;
     }
 
-    async pasteFromClipboard() {
-        try {
-            const text = await navigator.clipboard.readText();
-            this.handleSignal(text);
-        } catch (err) {
-            this.toast('Не удалось прочитать буфер');
+    handleSignal(msg) {
+        const friendKey = msg.from;
+        if (!this.friends.has(friendKey)) {
+            this.friends.set(friendKey, { online: true, ringing: false, pc: null });
+            this.renderFriends();
+            this.saveData();
+        }
+
+        const friend = this.friends.get(friendKey);
+        friend.online = true;
+
+        if (msg.type === 'offer') {
+            this.incomingCall(friendKey, msg.sdp);
+        } else if (msg.type === 'answer' && friend.pc) {
+            friend.pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        } else if (msg.type === 'candidate' && friend.pc) {
+            friend.pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        } else if (msg.type === 'online') {
+            friend.online = true;
+            this.renderFriends();
+        } else if (msg.type === 'offline') {
+            friend.online = false;
+            this.renderFriends();
         }
     }
 
-    setupPasteHandler() {
-        document.addEventListener('paste', (e) => {
-            const text = (e.clipboardData || window.clipboardData).getData('text');
-            if (text.startsWith('CALL_OFFER:') || text.startsWith('SIGNAL:')) {
-                e.preventDefault();
-                this.handleSignal(text);
-            }
-        });
-    }
+    incomingCall(friendKey, sdp) {
+        const friend = this.friends.get(friendKey);
+        friend.ringing = true;
+        this.renderFriends();
 
-    async handleSignal(text) {
-        if (!text.startsWith('CALL_OFFER:') && !text.startsWith('SIGNAL:')) return;
+        // Вибрация + мигание
+        if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+        this.toast(`Входящий звонок от ${friendKey}`);
 
-        try {
-            const payload = text.split(':')[1];
-            const signal = JSON.parse(atob(payload));
-            const friendKey = signal.from;
-
-            if (!this.friends.has(friendKey)) {
-                this.friends.add(friendKey);
-                this.renderFriends();
-                this.saveData();
-                this.toast(`Автодобавлен: ${friendKey}`);
-            }
-
-            let pc = this.peerConnections.get(friendKey);
-            if (!pc) {
-                pc = this.createPeerConnection(friendKey);
-                this.peerConnections.set(friendKey, pc);
+        // Автоответ при нажатии "Позвонить"
+        setTimeout(() => {
+            if (friend.ringing) {
+                const pc = this.createPC(friendKey, false);
+                friend.pc = pc;
                 this.currentCall = friendKey;
-                this.el.callPartner.textContent = friendKey;
-                this.el.callSection.classList.remove('hidden');
-            }
+                this.showCallUI(friendKey);
 
-            if (signal.type === 'offer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal));
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                const payload = btoa(JSON.stringify({ type: 'answer', sdp: answer.sdp, from: this.myPublicKey }));
-                await navigator.clipboard.writeText(`SIGNAL:${payload}`);
-                this.toast('ANSWER отправлен');
-            } else if (signal.type === 'answer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal));
-            } else if (signal.type === 'candidate') {
-                await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                pc.setRemoteDescription(new RTCSessionDescription(sdp))
+                    .then(() => pc.createAnswer())
+                    .then(answer => pc.setLocalDescription(answer))
+                    .then(() => {
+                        this.send({ type: 'answer', to: friendKey, sdp: pc.localDescription });
+                        friend.ringing = false;
+                        this.renderFriends();
+                    });
             }
-        } catch (err) {
-            console.error(err);
-            this.toast('Неверный сигнал');
-        }
+        }, 500);
+    }
+
+    showCallUI(key) {
+        this.el.callPartner.textContent = key;
+        this.el.callSection.classList.remove('hidden');
     }
 
     hangUp() {
-        if (this.currentCall) {
-            const pc = this.peerConnections.get(this.currentCall);
-            if (pc) pc.close();
-            this.peerConnections.delete(this.currentCall);
-            this.currentCall = null;
+        if (this.currentCall && this.friends.get(this.currentCall)?.pc) {
+            this.friends.get(this.currentCall).pc.close();
+            this.friends.get(this.currentCall).pc = null;
         }
+        this.currentCall = null;
         this.el.remoteVideo.srcObject = null;
         this.el.callSection.classList.add('hidden');
-        this.toast('Звонок завершён');
+    }
+
+    send(msg) {
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ ...msg, from: this.myKey }));
+        }
+    }
+
+    updateStatus(status, text) {
+        this.el.statusIcon.className = `fas fa-circle ${status === 'online' ? 'text-success' : 'text-danger'}`;
+        this.el.statusText.textContent = text;
+    }
+
+    toast(msg) {
+        const t = document.getElementById('toast');
+        t.textContent = msg;
+        t.classList.remove('hidden');
+        setTimeout(() => t.classList.add('hidden'), 3000);
     }
 
     saveData() {
         const data = {
-            myPublicKey: this.myPublicKey,
-            friends: [...this.friends]
+            myKey: this.myKey,
+            friends: Array.from(this.friends.keys())
         };
-        localStorage.setItem('peerskype_v2', JSON.stringify(data));
+        localStorage.setItem('peerskype_v3', JSON.stringify(data));
     }
 
     loadData() {
-        const raw = localStorage.getItem('peerskype_v2');
-        if (!raw) return;
-
-        try {
+        const raw = localStorage.getItem('peerskype_v3');
+        if (raw) {
             const data = JSON.parse(raw);
-            this.myPublicKey = data.myPublicKey;
-            this.friends = new Set(data.friends || []);
-
-            if (this.myPublicKey) {
-                this.el.publicKey.value = this.myPublicKey;
+            this.myKey = data.myKey;
+            if (this.myKey) {
+                this.el.publicKey.value = this.myKey;
                 this.el.noKey.classList.add('hidden');
                 this.el.hasKey.classList.remove('hidden');
             }
+            data.friends.forEach(key => {
+                this.friends.set(key, { online: false, ringing: false, pc: null });
+            });
             this.renderFriends();
-        } catch (err) {
-            console.error('Ошибка загрузки данных');
         }
-    }
-
-
-
-    toast(message) {
-        const toast = document.getElementById('toast');
-        toast.textContent = message;
-        toast.classList.remove('hidden');
-        setTimeout(() => toast.classList.add('hidden'), 3000);
     }
 }
 
 // Запуск
 const app = new PeerSkype();
-window.app = app; // для кнопок
+window.app = app;
+
+// Пинг каждые 10 сек
+setInterval(() => {
+    if (app.ws?.readyState === WebSocket.OPEN && app.myKey) {
+        app.send({ type: 'ping' });
+    }
+}, 10000);
