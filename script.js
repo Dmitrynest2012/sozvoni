@@ -1,287 +1,247 @@
 // Генерация ID
 function generateId() {
-  return 'user-' + Math.random().toString(36).substr(2, 9);
+  return 'u' + Math.random().toString(36).substr(2, 8);
 }
 
-// Хранилище
-const storage = {
-  get() {
-    const data = localStorage.getItem('p2p-chat');
-    return data ? JSON.parse(data) : { myId: null, friends: {} };
-  },
-  save(data) {
-    localStorage.setItem('p2p-chat', JSON.stringify(data));
-  }
-};
-
-let state = storage.get();
-if (!state.myId) {
-  state.myId = generateId();
-  storage.save(state);
-}
-
-const myId = state.myId;
+const myId = localStorage.getItem('myId') || generateId();
+localStorage.setItem('myId', myId);
 document.getElementById('myId').textContent = myId;
 
-// Элементы
+const friends = JSON.parse(localStorage.getItem('friends') || '{}');
+const peers = {};
+let currentFriend = null;
+
+// UI
 const friendsList = document.getElementById('friendsList');
 const friendIdInput = document.getElementById('friendIdInput');
 const addFriendBtn = document.getElementById('addFriend');
 const generateIdBtn = document.getElementById('generateId');
-
 const chatContainer = document.getElementById('chatContainer');
 const chatWith = document.getElementById('chatWith');
+const statusEl = document.getElementById('status');
 const messagesDiv = document.getElementById('messages');
 const messageInput = document.getElementById('messageInput');
 const sendMessageBtn = document.getElementById('sendMessage');
 const typingIndicator = document.getElementById('typingIndicator');
-
-const offerText = document.getElementById('offerText');
-const copyOffer = document.getElementById('copyOffer');
-const friendOffer = document.getElementById('friendOffer');
-const createAnswer = document.getElementById('createAnswer');
-const answerText = document.getElementById('answerText');
-const copyAnswer = document.getElementById('copyAnswer');
-const answerBlock = document.getElementById('answerBlock');
-const friendAnswer = document.getElementById('friendAnswer');
-const connectPeer = document.getElementById('connectPeer');
-const offerSection = document.getElementById('offerSection');
+const qrSection = document.getElementById('qrSection');
 const inputArea = document.getElementById('inputArea');
+const qrcodeDiv = document.getElementById('qrcode');
+const scanQrBtn = document.getElementById('scanQr');
+const qrInput = document.getElementById('qrInput');
 
-// P2P соединения
-const peers = {};
+let typingTimer;
 
-// Инициализация
-renderFriends();
-document.getElementById('generateId').onclick = () => {
-  state.myId = generateId();
-  storage.save(state);
-  document.getElementById('myId').textContent = state.myId;
-  myId = state.myId;
+// === P2P ===
+function createPeer(friendId, isCaller = true) {
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  });
+  peers[friendId] = pc;
+
+  const dc = pc.createDataChannel('chat');
+  dc.onopen = () => {
+    qrSection.style.display = 'none';
+    inputArea.style.display = 'flex';
+    updateStatus('Подключено');
+  };
+  dc.onmessage = e => handleMessage(friendId, e.data);
+
+  pc.ondatachannel = e => {
+    pc.dc = e.channel;
+    e.channel.onopen = () => {
+      qrSection.style.display = 'none';
+      inputArea.style.display = 'flex';
+      updateStatus('Подключено');
+    };
+    e.channel.onmessage = ev => handleMessage(friendId, ev.data);
+  };
+
+  pc.onicecandidate = e => {
+    if (!e.candidate && pc.localDescription) {
+      const sdp = JSON.stringify(pc.localDescription);
+      if (isCaller) {
+        generateQR(sdp);
+      }
+    }
+  };
+
+  if (isCaller) {
+    pc.createOffer()
+      .then(offer => pc.setLocalDescription(offer));
+  }
+
+  return pc;
+}
+
+// Генерация QR
+function generateQR(sdp) {
+  qrcodeDiv.innerHTML = '';
+  new QRCode(qrcodeDiv, {
+    text: JSON.stringify({ from: myId, sdp: JSON.parse(sdp) }),
+    width: 200,
+    height: 200,
+    colorDark: "#000",
+    colorLight: "#fff"
+  });
+}
+
+// Сканирование QR
+scanQrBtn.onclick = () => qrInput.click();
+qrInput.onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    canvas.getContext('2d').drawImage(img, 0, 0);
+    const dataUrl = canvas.toDataURL();
+
+    // Используем jsQR (встроен в qrcode.js)
+    qrcode.callback = async (err, result) => {
+      if (err || !result) return alert('QR не распознан');
+      const data = JSON.parse(result.data);
+      if (data.from !== currentFriend) return alert('QR не от этого друга');
+
+      const pc = peers[currentFriend] || createPeer(currentFriend, false);
+      await pc.setRemoteDescription(data.sdp);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+    };
+    qrcode.decode(dataUrl);
+  };
+  img.src = URL.createObjectURL(file);
 };
 
-// Добавление друга
+// === Сообщения ===
+function handleMessage(friendId, data) {
+  const msg = JSON.parse(data);
+  if (msg.type === 'text') {
+    appendMessage(msg, false);
+    sendSeen(friendId, msg.id);
+  } else if (msg.type === 'typing') {
+    clearTimeout(typingTimer);
+    typingIndicator.textContent = 'Печатает...';
+    typingTimer = setTimeout(() => typingIndicator.textContent = '', 1000);
+  } else if (msg.type === 'seen') {
+    const el = document.querySelector(`[data-id="${msg.id}"] .seen`);
+    if (el) el.textContent = '✓';
+  }
+}
+
+function sendSeen(friendId, id) {
+  const dc = peers[friendId]?.dc;
+  if (dc?.readyState === 'open') {
+    dc.send(JSON.stringify({ type: 'seen', id }));
+  }
+}
+
+function appendMessage(msg, isOut) {
+  const div = document.createElement('div');
+  div.className = `message ${isOut ? 'outgoing' : 'incoming'}`;
+  div.dataset.id = msg.id;
+
+  let html = msg.text
+    .replace(/https?:\/\/[^\s]+/g, u => `<a href="${u}" target="_blank">${u}</a>`)
+    .replace(/(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/g, 
+      (_, __, ___, ____, id) => `<iframe class="youtube-embed" src="https://www.youtube.com/embed/${id}" allowfullscreen></iframe>`
+    );
+
+  div.innerHTML = `${html}<span class="time">${msg.time} ${isOut ? '<span class="seen"></span>' : ''}</span>`;
+  messagesDiv.appendChild(div);
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+// === UI ===
+generateIdBtn.onclick = () => {
+  localStorage.setItem('myId', generateId());
+  location.reload();
+};
+
 addFriendBtn.onclick = () => {
   const id = friendIdInput.value.trim();
-  if (id && id !== myId && !state.friends[id]) {
-    state.friends[id] = { name: id.substr(0, 12), connected: false };
-    storage.save(state);
+  if (id && id !== myId && !friends[id]) {
+    friends[id] = { name: id.slice(0, 10) };
+    saveFriends();
     renderFriends();
     friendIdInput.value = '';
   }
 };
 
-generateIdBtn.onclick = () => {
-  state.myId = generateId();
-  document.getElementById('myId').textContent = state.myId;
-  storage.save(state);
-};
-
-// Рендер друзей
 function renderFriends() {
   friendsList.innerHTML = '';
-  Object.keys(state.friends).forEach(id => {
+  Object.keys(friends).forEach(id => {
     const li = document.createElement('li');
-    li.innerHTML = `
-      <span>${state.friends[id].name}</span>
-      <button onclick="removeFriend('${id}')">×</button>
-    `;
-    li.onclick = (e) => {
-      if (e.target.tagName !== 'BUTTON') openChat(id);
-    };
+    li.innerHTML = `<span>${friends[id].name}</span><button onclick="removeFriend('${id}')">×</button>`;
+    li.onclick = e => e.target.tagName !== 'BUTTON' && openChat(id);
     friendsList.appendChild(li);
   });
 }
 
-window.removeFriend = (id) => {
-  delete state.friends[id];
-  if (peers[id]) {
-    peers[id].close();
-    delete peers[id];
-  }
-  storage.save(state);
+window.removeFriend = id => {
+  delete friends[id];
+  if (peers[id]) peers[id].close();
+  delete peers[id];
+  saveFriends();
   renderFriends();
-  if (document.getElementById('chatWith').dataset.id === id) {
-    chatContainer.style.display = 'none';
-  }
+  if (currentFriend === id) chatContainer.style.display = 'none';
 };
 
-// Открытие чата
-function openChat(friendId) {
-  chatWith.textContent = state.friends[friendId].name;
-  chatWith.dataset.id = friendId;
+function openChat(id) {
+  currentFriend = id;
+  chatWith.textContent = friends[id].name;
   messagesDiv.innerHTML = '';
   chatContainer.style.display = 'flex';
-
-  offerSection.style.display = 'grid';
+  qrSection.style.display = 'block';
   inputArea.style.display = 'none';
+  updateStatus('Генерация QR...');
 
-  if (!peers[friendId]) {
-    createPeer(friendId);
-  } else if (peers[friendId].dataChannel?.readyState === 'open') {
-    offerSection.style.display = 'none';
-    inputArea.style.display = 'flex';
+  if (!peers[id]) {
+    createPeer(id, true);
   }
 }
 
-// Создание пира
-function createPeer(friendId) {
-  const pc = new RTCPeerConnection({
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-  });
-
-  const dc = pc.createDataChannel('chat');
-  dc.onopen = () => {
-    offerSection.style.display = 'none';
-    inputArea.style.display = 'flex';
-    state.friends[friendId].connected = true;
-    storage.save(state);
-  };
-  dc.onmessage = (e) => handleMessage(friendId, e.data);
-  dc.onclose = () => {
-    state.friends[friendId].connected = false;
-    storage.save(state);
-  };
-
-  pc.ondatachannel = (e) => {
-    pc.dataChannel = e.channel;
-    e.channel.onmessage = (ev) => handleMessage(friendId, ev.data);
-    e.channel.onopen = () => {
-      offerSection.style.display = 'none';
-      inputArea.style.display = 'flex';
-    };
-  };
-
-  pc.onicecandidate = (e) => {
-    if (e.candidate === null && pc.localDescription) {
-      if (pc.localDescription.type === 'offer') {
-        offerText.value = JSON.stringify(pc.localDescription);
-      } else if (pc.localDescription.type === 'answer') {
-        answerText.value = JSON.stringify(pc.localDescription);
-      }
-    }
-  };
-
-  peers[friendId] = pc;
-  pc.dataChannel = dc;
-
-  // Создание оффера
-  pc.createOffer().then(offer => pc.setLocalDescription(offer));
+function updateStatus(text) {
+  statusEl.textContent = text;
 }
 
-// Обработка сообщений
-let typingTimer;
-function handleMessage(friendId, data) {
-  const msg = JSON.parse(data);
-  if (msg.type === 'message') {
-    appendMessage(msg, false);
-    markAsSeen(friendId, msg.id);
-  } else if (msg.type === 'typing') {
-    clearTimeout(typingTimer);
-    typingIndicator.textContent = 'Печатает...';
-    typingTimer = setTimeout(() => {
-      typingIndicator.textContent = '';
-    }, 1000);
-  } else if (msg.type === 'seen') {
-    const msgEl = document.querySelector(`[data-id="${msg.id}"]`);
-    if (msgEl) msgEl.querySelector('.seen').textContent = '✓ Просмотрено';
-  }
-}
-
-// Отправка
-sendMessageBtn.onclick = () => send();
-messageInput.addEventListener('keydown', (e) => {
+sendMessageBtn.onclick = sendMsg;
+messageInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    send();
+    sendMsg();
   } else {
-    sendTyping();
+    const dc = peers[currentFriend]?.dc;
+    if (dc?.readyState === 'open') {
+      dc.send(JSON.stringify({ type: 'typing' }));
+    }
   }
 });
 
-function send() {
+function sendMsg() {
   const text = messageInput.value.trim();
-  if (!text) return;
-
-  const friendId = chatWith.dataset.id;
-  const pc = peers[friendId];
-  if (!pc?.dataChannel || pc.dataChannel.readyState !== 'open') return;
+  if (!text || !currentFriend) return;
 
   const msg = {
-    id: Date.now() + '-' + Math.random(),
+    id: Date.now() + Math.random(),
     text,
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    type: 'message'
+    type: 'text'
   };
 
-  pc.dataChannel.send(JSON.stringify(msg));
-  appendMessage(msg, true);
-  messageInput.value = '';
-}
-
-function sendTyping() {
-  const friendId = chatWith.dataset.id;
-  const pc = peers[friendId];
-  if (pc?.dataChannel?.readyState === 'open') {
-    pc.dataChannel.send(JSON.stringify({ type: 'typing' }));
+  const dc = peers[currentFriend]?.dc;
+  if (dc?.readyState === 'open') {
+    dc.send(JSON.stringify(msg));
+    appendMessage(msg, true);
+    messageInput.value = '';
   }
 }
 
-function appendMessage(msg, isOutgoing) {
-  const div = document.createElement('div');
-  div.className = `message ${isOutgoing ? 'outgoing' : 'incoming'}`;
-  div.dataset.id = msg.id;
-
-  let content = msg.text
-    .replace(/https?:\/\/[^\s]+/g, url => `<a href="${url}" target="_blank">${url}</a>`)
-    .replace(/https?:\/\/(www\.)?youtube\.com\/watch\?v=([a-zA-Z0-9_-]+)/g, (m, _, id) => {
-      return `<iframe class="youtube-embed" src="https://www.youtube.com/embed/${id}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
-    })
-    .replace(/https?:\/\/youtu\.be\/([a-zA-Z0-9_-]+)/g, (m, id) => {
-      return `<iframe class="youtube-embed" src="https://www.youtube.com/embed/${id}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
-    });
-
-  div.innerHTML = `
-    ${content}
-    <span class="time">${msg.time} ${isOutgoing ? '<span class="seen"></span>' : ''}</span>
-  `;
-  messagesDiv.appendChild(div);
-  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+function saveFriends() {
+  localStorage.setItem('friends', JSON.stringify(friends));
 }
 
-function markAsSeen(friendId, msgId) {
-  const pc = peers[friendId];
-  if (pc?.dataChannel?.readyState === 'open') {
-    pc.dataChannel.send(JSON.stringify({ type: 'seen', id: msgId }));
-  }
-}
-
-// Обмен сигналами
-copyOffer.onclick = () => {
-  offerText.select();
-  document.execCommand('copy');
-  alert('Оффер скопирован!');
-};
-
-createAnswer.onclick = async () => {
-  const friendId = chatWith.dataset.id;
-  const pc = peers[friendId];
-  const offer = JSON.parse(friendOffer.value);
-  await pc.setRemoteDescription(offer);
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  answerBlock.style.display = 'block';
-};
-
-copyAnswer.onclick = () => {
-  answerText.select();
-  document.execCommand('copy');
-  alert('Ответ скопирован!');
-};
-
-connectPeer.onclick = async () => {
-  const friendId = chatWith.dataset.id;
-  const pc = peers[friendId];
-  const answer = JSON.parse(friendAnswer.value);
-  await pc.setRemoteDescription(answer);
-};
+// Старт
+renderFriends();

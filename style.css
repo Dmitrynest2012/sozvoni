@@ -178,37 +178,8 @@ button:hover {
   border-radius: 8px;
 }
 
-.offer-section {
-  padding: 20px;
-  background: #1a1a2e;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 15px;
-  flex-wrap: wrap;
-}
-
-.offer-block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.offer-block label {
-  font-size: 14px;
-  color: #ccc;
-}
-
-.offer-block textarea {
-  height: 80px;
-  background: #0f0f1a;
-  border: 1px solid #334;
-  color: white;
-  padding: 8px;
-  border-radius: 6px;
-  font-family: monospace;
-  font-size: 12px;
-  resize: none;
-}
+/* ... (всё то же самое, что раньше) ... */
+.offer-section { display: none !important; }
 
 .input-area {
   display: flex;
@@ -231,4 +202,28 @@ button:hover {
 
 #sendMessage {
   align-self: flex-end;
+}
+
+.qr-section {
+  padding: 20px;
+  text-align: center;
+  background: #1a1a2e;
+  border-bottom: 1px solid #334;
+}
+
+#qrcode {
+  margin: 15px auto;
+  padding: 10px;
+  background: white;
+  border-radius: 12px;
+  width: fit-content;
+}
+
+#scanQr {
+  margin-top: 10px;
+  background: #0f3460;
+}
+
+#scanQr:hover {
+  background: #1e5f9e;
 }

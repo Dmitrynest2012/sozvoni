@@ -3,17 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>P2P Чат</title>
+  <title>P2P Чат (QR)</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/qrcode.js@1.0.0/lib/qrcode.min.js"></script>
 </head>
 <body>
   <div class="container">
-    <!-- Левая панель — друзья -->
+    <!-- Левая панель -->
     <div class="sidebar">
       <div class="header">
         <h2>Мой ID</h2>
         <div class="my-id" id="myId"></div>
-        <button id="generateId">Сгенерировать ID</button>
+        <button id="generateId">Новый ID</button>
       </div>
 
       <div class="friends-section">
@@ -27,43 +28,31 @@
     </div>
 
     <!-- Правая панель — чат -->
-    <div class="chat-container" id="chatContainer" style="display: none;">
+    <div class="chat-container" id="chatContainer" style="display:none;">
       <div class="chat-header">
         <h3 id="chatWith"></h3>
         <div id="typingIndicator" class="typing"></div>
+        <div id="status" style="font-size:12px; color:#0f0"></div>
+      </div>
+
+      <!-- QR-код для подключения -->
+      <div id="qrSection" class="qr-section">
+        <p>Попросите друга отсканировать:</p>
+        <div id="qrcode"></div>
+        <button id="scanQr">Сканировать QR друга</button>
       </div>
 
       <div class="messages" id="messages"></div>
 
-      <div class="offer-section" id="offerSection">
-        <div class="offer-block">
-          <label>Ваш оффер:</label>
-          <textarea id="offerText" readonly></textarea>
-          <button id="copyOffer">Копировать</button>
-        </div>
-        <div class="offer-block">
-          <label>Вставьте оффер друга:</label>
-          <textarea id="friendOffer" placeholder="Вставьте сюда"></textarea>
-          <button id="createAnswer">Создать ответ</button>
-        </div>
-        <div class="offer-block" id="answerBlock" style="display:none;">
-          <label>Ваш ответ (отправьте другу):</label>
-          <textarea id="answerText" readonly></textarea>
-          <button id="copyAnswer">Копировать</button>
-        </div>
-        <div class="offer-block">
-          <label>Вставьте ответ друга:</label>
-          <textarea id="friendAnswer" placeholder="Вставьте сюда"></textarea>
-          <button id="connectPeer">Подключиться</button>
-        </div>
-      </div>
-
       <div class="input-area" id="inputArea" style="display:none;">
-        <textarea id="messageInput" placeholder="Введите сообщение..."></textarea>
+        <textarea id="messageInput" placeholder="Сообщение..."></textarea>
         <button id="sendMessage">Отправить</button>
       </div>
     </div>
   </div>
+
+  <!-- Скрытый input для сканирования -->
+  <input type="file" id="qrInput" accept="image/*" style="display:none;" />
 
   <script src="script.js"></script>
 </body>
